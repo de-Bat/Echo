@@ -1,0 +1,9 @@
+{
+    "ExampleShop": {
+        "product_name": "h1.product-title",
+        "price": "span.price-value",
+        "currency_symbol": "span.currency-symbol",
+        "shipping_cost": "span.shipping-cost",
+        "stock_status": "span.stock-status"
+    }
+}

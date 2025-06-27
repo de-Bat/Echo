@@ -1,0 +1,8 @@
+requests
+beautifulsoup4
+scikit-learn
+pydantic
+sqlalchemy
+click # For CLI
+# Flask or Django will be added later if a web UI is decided upon
+# PyTorch or TensorFlow will be added if a more complex AI model is needed

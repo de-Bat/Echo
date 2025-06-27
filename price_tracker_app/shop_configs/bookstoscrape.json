@@ -1,0 +1,8 @@
+{
+    "BooksToScrape": {
+        "product_name": "div.product_main h1",
+        "price": "div.product_main p.price_color",
+        "availability": "div.product_main p.instock.availability",
+        "product_description": "#content_inner article.product_page > p"
+    }
+}
