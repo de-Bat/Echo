@@ -32,24 +32,29 @@ def init_db():
     # they are registered properly on the metadata. Otherwise
     # you will have to import them first before calling init_db()
     from . import models # noqa
-    print(f"Initializing database at {DATABASE_URL}...")
+    logger.info(f"Initializing database at {DATABASE_URL}...")
     Base.metadata.create_all(bind=engine)
-    print("Database tables created (if they didn't exist).")
+    logger.info("Database tables created (if they didn't exist).")
 
 if __name__ == "__main__":
     # This script can be run directly to initialize the database.
-    print("Running db_setup directly to initialize database...")
+    # Setup basic logging if run directly
+    from price_tracker_app.logging_config import setup_logging
+    setup_logging(logging.INFO)
+    logger.info("Running db_setup directly to initialize database...")
     init_db()
-    print("Database initialization process finished.")
+    logger.info("Database initialization process finished.")
 
     # You can add a small test here to verify session creation
     try:
         db = SessionLocal()
-        print("Database session created successfully.")
+        logger.info("Database session created successfully.")
         # Perform a simple query
-        result = db.execute("SELECT 1").scalar_one()
-        print(f"Test query result: {result}")
+        # Using text() for SQLAlchemy 2.0 compatibility if it were a more complex query
+        from sqlalchemy import text
+        result = db.execute(text("SELECT 1")).scalar_one()
+        logger.info(f"Test query result: {result}")
         db.close()
-        print("Database session closed.")
+        logger.info("Database session closed.")
     except Exception as e:
-        print(f"Error during database session test: {e}")
+        logger.exception(f"Error during database session test:")

@@ -1,8 +1,11 @@
 from bs4 import BeautifulSoup
 from typing import Optional
+import logging # Added for logging
 
 from price_tracker_app.scraping.base_scraper import BaseScraper, ScrapeResult
 # Selectors are now loaded from JSON config by BaseScraper
+
+logger = logging.getLogger(__name__)
 
 class ExampleShopScraper(BaseScraper):
     """
@@ -31,9 +34,9 @@ class ExampleShopScraper(BaseScraper):
             if name_element:
                 result.product_name = name_element.get_text(strip=True)
             else:
-                print(f"Warning: Product name element not found using selector '{name_selector}' on {product_url}")
+                logger.warning(f"Product name element not found using selector '{name_selector}' on {product_url} for shop {self.SHOP_NAME}")
         else:
-            print("Warning: Product name selector not configured for ExampleShop.")
+            logger.warning(f"Product name selector not configured for shop {self.SHOP_NAME}.")
 
         # Extract Price
         price_selector = self.selectors.get("price")
@@ -44,9 +47,9 @@ class ExampleShopScraper(BaseScraper):
                 raw_price_str = price_element.get_text(strip=True)
                 result.price = self._clean_price_string(raw_price_str) # Use inherited cleaner
             else:
-                print(f"Warning: Price element not found using selector '{price_selector}' on {product_url}")
+                logger.warning(f"Price element not found using selector '{price_selector}' on {product_url} for shop {self.SHOP_NAME}")
         else:
-            print("Warning: Price selector not configured for ExampleShop.")
+            logger.warning(f"Price selector not configured for shop {self.SHOP_NAME}.")
 
         # Extract Currency Symbol (optional, can help validate or determine currency if not fixed)
         currency_selector = self.selectors.get("currency_symbol")
@@ -75,9 +78,9 @@ class ExampleShopScraper(BaseScraper):
             if shipping_element:
                 result.shipping_cost = self._clean_price_string(shipping_element.get_text(strip=True))
             else:
-                print(f"Warning: Shipping cost element not found using selector '{shipping_selector}' on {product_url}")
+                logger.warning(f"Shipping cost element not found using selector '{shipping_selector}' on {product_url} for shop {self.SHOP_NAME}")
         else:
-            print("Warning: Shipping cost selector not configured for ExampleShop.")
+            logger.warning(f"Shipping cost selector not configured for shop {self.SHOP_NAME}.")
 
         # Extract Stock Status
         stock_selector = self.selectors.get("stock_status")
@@ -86,9 +89,9 @@ class ExampleShopScraper(BaseScraper):
             if stock_element:
                 result.stock_status = stock_element.get_text(strip=True)
             else:
-                print(f"Warning: Stock status element not found using selector '{stock_selector}' on {product_url}")
+                logger.warning(f"Stock status element not found using selector '{stock_selector}' on {product_url} for shop {self.SHOP_NAME}")
         else:
-            print("Warning: Stock status selector not configured for ExampleShop.")
+            logger.warning(f"Stock status selector not configured for shop {self.SHOP_NAME}.")
 
         return result
 

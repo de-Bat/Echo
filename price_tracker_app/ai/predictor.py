@@ -3,6 +3,7 @@
 from typing import List, Optional
 import uuid # For Item ID, Address ID if needed for recommendation context
 from datetime import datetime
+import logging
 
 from price_tracker_app.core.models import Item as CoreItem, PriceEntry as CorePriceEntry, Recommendation, RecommendationAction
 from price_tracker_app.database.crud import get_price_entries_for_item # To fetch history
@@ -11,111 +12,88 @@ from price_tracker_app.database.db_setup import SessionLocal # To create a DB se
 from .features import extract_features
 from .models.simple_heuristic_model import SimpleHeuristicModel # Our first model
 
+logger = logging.getLogger(__name__)
+
 class PricePredictor:
     def __init__(self, model_instance=None, db_session_factory=None):
-        """
-        Initializes the PricePredictor.
-
-        Args:
-            model_instance: An instance of a prediction model (e.g., SimpleHeuristicModel).
-                            If None, a default SimpleHeuristicModel is created.
-            db_session_factory: A callable that returns a new SQLAlchemy Session.
-                                If None, SessionLocal from db_setup will be used.
-        """
         self.model = model_instance if model_instance else SimpleHeuristicModel()
         self.db_session_factory = db_session_factory if db_session_factory else SessionLocal
+        logger.debug(f"PricePredictor initialized with model: {type(self.model).__name__}")
 
     def generate_recommendation(
         self,
         item_id: uuid.UUID,
-        current_price_entry: CorePriceEntry, # The latest price entry, just scraped
-        address_id: Optional[uuid.UUID] = None, # For address-specific considerations
-        history_limit: int = 90 # Number of past price entries to consider (e.g., 90 days)
+        current_price_entry: CorePriceEntry,
+        address_id: Optional[uuid.UUID] = None,
+        history_limit: int = 90
     ) -> Optional[Recommendation]:
-        """
-        Generates a buy/wait/hold recommendation for a given item.
-
-        Args:
-            item_id: The UUID of the item to generate a recommendation for.
-            current_price_entry: The most recent PriceEntry object for the item.
-                                 Ensure its total_price is calculated.
-            address_id: Optional UUID of the address for context (e.g., if shipping varies).
-            history_limit: Max number of historical price entries to fetch for feature calculation.
-
-        Returns:
-            A Recommendation object, or None if a recommendation cannot be generated.
-        """
-
         db = self.db_session_factory()
         try:
-            # 1. Fetch historical price data for the item
-            # get_price_entries_for_item returns sorted by timestamp desc. We need asc for some features.
+            logger.info(f"Generating recommendation for item_id: {item_id}, current price entry timestamp: {current_price_entry.timestamp}, price: {current_price_entry.price}")
+
             historical_entries_db = get_price_entries_for_item(db, item_id, limit=history_limit)
+            logger.debug(f"Fetched {len(historical_entries_db)} historical price entries for item {item_id}.")
+
             if not historical_entries_db:
-                # If no history, we might still proceed with current price against general knowledge,
-                # but features relying on history (like MAs) will be None.
-                # For now, let's include the current price as the only history point.
                 price_history_for_features = [current_price_entry]
+                logger.debug("No historical entries found, using current price entry as history.")
             else:
-                # Convert DB models to CorePriceEntry models if necessary, or ensure compatibility.
-                # For now, assuming they are compatible enough or features.py handles DB models.
-                # The PriceEntry in features.py is from core.models, so this should be fine.
-                # We need them sorted chronologically (oldest to newest) for features.py
                 price_history_for_features = [pe_db_to_core(pe) for pe in reversed(historical_entries_db)]
-                # Add the current price entry to the end of the history if it's newer or not included
+                # Ensure current_price_entry is the most recent in the list for feature calculation
                 if not price_history_for_features or current_price_entry.timestamp > price_history_for_features[-1].timestamp:
-                     price_history_for_features.append(current_price_entry)
-                elif current_price_entry.timestamp == price_history_for_features[-1].timestamp and \
-                     current_price_entry.id != price_history_for_features[-1].id:
-                     # If timestamp is same but different entry (e.g. different shop price at same time), replace last
-                     price_history_for_features[-1] = current_price_entry
+                    price_history_for_features.append(current_price_entry)
+                    logger.debug("Appended current price entry to historical list as it's newest.")
+                elif current_price_entry.timestamp == price_history_for_features[-1].timestamp:
+                    # If timestamps are identical, replace the last one from DB with the current one,
+                    # assuming current_price_entry is fresher or more relevant for this exact moment.
+                    # Check by ID if they are truly different entries.
+                    if current_price_entry.id != price_history_for_features[-1].id:
+                        price_history_for_features[-1] = current_price_entry
+                        logger.debug("Replaced last historical entry with current due to same timestamp but different ID.")
+                    else:
+                        logger.debug("Current price entry is identical to the last historical entry. Using as is.")
+                else:
+                    # This case (current older than last historical) should ideally not happen if data is consistent.
+                    logger.warning(f"Current price entry timestamp {current_price_entry.timestamp} is older than last historical entry {price_history_for_features[-1].timestamp}. Appending anyway.")
+                    price_history_for_features.append(current_price_entry)
 
 
-            # Ensure current_price_entry has total_price calculated.
-            # The crud.create_price_entry does this, but if this is a "live" non-DB entry:
             if current_price_entry.total_price is None:
                 current_price_entry.calculate_total_price()
                 if current_price_entry.total_price is None and current_price_entry.price is not None:
-                    # Fallback if calculate_total_price didn't set it but price exists
+                    # Fallback if total_price is still None but base price exists
                     current_price_entry.total_price = current_price_entry.price
+                logger.debug(f"Calculated total_price for current_price_entry: {current_price_entry.total_price}")
 
-
-            # 2. Extract features
-            # The current_price_entry should be the one for which features are centered if it's distinct
-            # from the latest in history.
+            logger.debug(f"Extracting features with {len(price_history_for_features)} entries in history for features.")
             features = extract_features(price_history_for_features, current_price_entry)
-            if not features: # Should not happen if current_price_entry is always provided
-                print(f"Warning: Could not extract features for item {item_id}.")
+
+            if not features: # Should ideally not be empty if current_price_entry is valid
+                logger.warning(f"Could not extract features for item {item_id}. Features dict is empty.")
                 return None
+            logger.debug(f"Features extracted for item {item_id}: {features}")
 
-            # 3. Get prediction from the model
             action, accuracy, certainty, reasoning = self.model.predict(features)
+            logger.info(f"Model prediction for item {item_id}: Action={action.value}, Accuracy={accuracy:.2f}, Certainty={certainty:.2f}, Reason='{reasoning}'")
 
-            # 4. Create Recommendation object
             recommendation = Recommendation(
                 item_id=item_id,
                 address_id=address_id,
-                timestamp=datetime.now(), # Timestamp of when the recommendation was generated
-                predicted_action=action,  # Already a RecommendationAction enum from the model
+                timestamp=datetime.now(),
+                predicted_action=action,
                 accuracy_rank=accuracy,
                 certainty_rank=certainty,
                 reasoning=reasoning
-                # We could also store the features used, or model version, etc.
             )
             return recommendation
 
-        except Exception as e:
-            # Log the error appropriately
-            print(f"Error generating recommendation for item {item_id}: {e}")
+        except Exception:
+            logger.exception(f"Error generating recommendation for item {item_id}:")
             return None
         finally:
             db.close()
 
 def pe_db_to_core(db_pe) -> CorePriceEntry:
-    """Helper to convert a database PriceEntry model to a Pydantic CorePriceEntry model."""
-    # This is needed if the objects from get_price_entries_for_item are SQLAlchemy models
-    # and extract_features expects Pydantic models.
-    # Assuming db_models.PriceEntry has compatible field names with core_models.PriceEntry
     core_data = {
         "id": db_pe.id,
         "item_id": db_pe.item_id,
@@ -126,63 +104,65 @@ def pe_db_to_core(db_pe) -> CorePriceEntry:
         "shipping_cost": db_pe.shipping_cost,
         "taxes": db_pe.taxes,
         "url_scraped_from": db_pe.url_scraped_from,
-        # total_price from DB model is a hybrid_property, access it directly
         "total_price": db_pe.total_price
     }
     entry = CorePriceEntry(**core_data)
-    # Pydantic model's calculate_total_price might be redundant if DB model's hybrid property works,
-    # but good to ensure consistency if used.
-    # entry.calculate_total_price() # Call if necessary, but db_pe.total_price should be correct
+    # Ensure total_price is calculated if it somehow ended up None from DB model
+    if entry.total_price is None:
+        entry.calculate_total_price()
     return entry
 
 
 if __name__ == "__main__":
     from price_tracker_app.database.db_setup import init_db
-    # Moved db_models import higher for use in main test queries
     from price_tracker_app.database import models as db_models
     from price_tracker_app.database.crud import create_item, create_shop, create_price_entry
     from price_tracker_app.core.models import Shop as CoreShop, Item as CoreItem
+    from price_tracker_app.logging_config import setup_logging
 
-    print("--- Testing PricePredictor ---")
+    setup_logging(logging.DEBUG) # Setup logging for direct script run
+    logger.info("--- Testing PricePredictor ---")
 
-    # 1. Initialize Database (in-memory for this test for simplicity, or use existing file)
-    # For this test, let's assume the db_setup.DATABASE_URL is using a file like 'price_tracker.db'
-    # And we run init_db() to ensure tables exist.
-    # Note: If DATABASE_URL was "sqlite:///:memory:", each SessionLocal() would be a new DB.
-    # We need a persistent DB for this test flow.
-    init_db() # Ensures tables are created in 'price_tracker.db'
-
-    # Create a session for test data setup
+    init_db()
     db = SessionLocal()
 
     try:
-        # 2. Setup mock data in the database
-        # Create a shop
         test_shop_core = CoreShop(name="PredictTestShop", home_url="http://predicttest.com")
-        # Check if shop exists to avoid re-creating, or handle unique constraint
         db_shop = db.query(db_models.Shop).filter_by(name=test_shop_core.name).first()
         if not db_shop:
             db_shop = create_shop(db, test_shop_core)
+            logger.info(f"Created shop '{db_shop.name}' for test.")
 
-        # Create an item
         test_item_core = CoreItem(
             name="PredictTestProduct",
             product_urls=["http://predicttest.com/product1"],
             target_shops_ids=[db_shop.id]
         )
-        db_item = db.query(db_models.Item).filter_by(name=test_item_core.name).first()
-        if not db_item:
-            db_item = create_item(db, test_item_core)
+        # Use a fixed UUID for predictability in tests if DB is reset
+        test_item_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, test_item_core.name)
+        test_item_core.id = test_item_uuid
 
-        # Add some historical price entries
-        # Ensure these are added only once if script is run multiple times
+        db_item = db.query(db_models.Item).filter_by(id=test_item_uuid).first()
+        if not db_item:
+             db_item_by_name = db.query(db_models.Item).filter_by(name=test_item_core.name).first()
+             if db_item_by_name: # If exists by name, use it (e.g. after schema change without ID)
+                 db_item = db_item_by_name
+                 logger.info(f"Found item '{db_item.name}' by name for test.")
+             else:
+                db_item = create_item(db, test_item_core)
+                logger.info(f"Created item '{db_item.name}' for test.")
+        else:
+            logger.info(f"Using existing item '{db_item.name}' for test.")
+
+
         if not get_price_entries_for_item(db, db_item.id, limit=1):
             base_time = datetime(2023, 10, 1)
             prices_data = [
                 (110.0, 10.0, 5.0), (108.0, 10.0, 4.9), (105.0, 9.0, 4.5),
-                (106.0, 9.0, 4.6), (100.0, 8.0, 4.0), # Price drop
-                (98.0, 8.0, 3.9),  (99.0, 8.0, 3.95)  # Current is 99
+                (106.0, 9.0, 4.6), (100.0, 8.0, 4.0),
+                (98.0, 8.0, 3.9),  (99.0, 8.0, 3.95)
             ]
+            logger.info(f"Adding {len(prices_data)} mock price entries for item {db_item.name}.")
             for i, (price, ship, tax) in enumerate(prices_data):
                 pe_core = CorePriceEntry(
                     item_id=db_item.id, shop_id=db_shop.id,
@@ -190,51 +170,38 @@ if __name__ == "__main__":
                     price=price, shipping_cost=ship, taxes=tax,
                     url_scraped_from="http://predicttest.com/product1"
                 )
-                create_price_entry(db, pe_core) # This calculates and stores total_price
-            print(f"Added {len(prices_data)} mock price entries for item {db_item.name}.")
+                create_price_entry(db, pe_core)
         else:
-            print(f"Mock price entries already exist for item {db_item.name}.")
+            logger.info(f"Mock price entries already exist for item {db_item.name}.")
 
-        # 3. Create a current PriceEntry (as if it was just scraped)
         current_pe_core = CorePriceEntry(
             item_id=db_item.id, shop_id=db_shop.id,
-            timestamp=datetime(2023, 10, 1) + timedelta(days=len(prices_data)), # Newest
-            price=95.0, shipping_cost=7.0, taxes=3.5, # A new, lower price
+            timestamp=datetime(2023, 10, 1) + timedelta(days=len(prices_data) if 'prices_data' in locals() else 7), # Newest
+            price=95.0, shipping_cost=7.0, taxes=3.5,
             url_scraped_from="http://predicttest.com/product1"
         )
-        current_pe_core.calculate_total_price() # Ensure total_price is set: 95+7+3.5 = 105.5
-        print(f"Current Price Entry for test: Price={current_pe_core.price}, Total={current_pe_core.total_price} at {current_pe_core.timestamp}")
+        current_pe_core.calculate_total_price()
+        logger.info(f"Current Price Entry for test: Price={current_pe_core.price}, Total={current_pe_core.total_price} at {current_pe_core.timestamp}")
 
-        # 4. Initialize Predictor
         predictor = PricePredictor()
-
-        # 5. Generate Recommendation
-        print(f"\nGenerating recommendation for item: {db_item.name} (ID: {db_item.id})")
+        logger.info(f"Generating recommendation for item: {db_item.name} (ID: {db_item.id})")
         recommendation = predictor.generate_recommendation(db_item.id, current_pe_core)
 
         if recommendation:
-            print("\n--- Generated Recommendation ---")
-            print(f"  Action: {recommendation.predicted_action.value}")
-            print(f"  Accuracy: {recommendation.accuracy_rank:.2f}")
-            print(f"  Certainty: {recommendation.certainty_rank:.2f}")
-            print(f"  Reasoning: {recommendation.reasoning}")
-            print(f"  Timestamp: {recommendation.timestamp}")
-
-            # Optionally, save the recommendation to DB
-            # from .crud import create_recommendation
-            # db_recommendation = create_recommendation(db, recommendation)
-            # print(f"Recommendation saved with ID: {db_recommendation.id}")
+            logger.info("--- Generated Recommendation ---")
+            logger.info(f"  Action: {recommendation.predicted_action.value}")
+            logger.info(f"  Accuracy: {recommendation.accuracy_rank:.2f}")
+            logger.info(f"  Certainty: {recommendation.certainty_rank:.2f}")
+            logger.info(f"  Reasoning: {recommendation.reasoning}")
+            logger.info(f"  Timestamp: {recommendation.timestamp}")
         else:
-            print("Failed to generate recommendation.")
+            logger.warning("Failed to generate recommendation.")
 
-    except Exception as e:
-        print(f"An error occurred during PricePredictor test: {e}")
-        import traceback
-        traceback.print_exc()
+    except Exception:
+        logger.exception("An error occurred during PricePredictor test:")
         db.rollback()
     finally:
         db.close()
-        print("\nPricePredictor test finished. Database session closed.")
+        logger.info("PricePredictor test finished. Database session closed.")
 
-    # from price_tracker_app.database import models as db_models # Moved to top of __main__
-    print("Finished importing for main test section.")
+    logger.info("Finished importing for main test section.")

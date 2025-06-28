@@ -5,12 +5,14 @@ from typing import Optional, Tuple, Dict
 import re
 import json
 import os
+import logging # Added for logging
 from pydantic import BaseModel # Added for ScrapeResult
 
 from price_tracker_app.scraping import get_random_user_agent # Updated import
 # from price_tracker_app.scraping.selectors import get_shop_selectors # Will be removed
 from price_tracker_app.core.models import PriceEntry # For type hinting eventually
 
+logger = logging.getLogger(__name__)
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "shop_configs")
 
 class ScrapeResult(BaseModel): # Using Pydantic for structured result
@@ -59,7 +61,7 @@ class BaseScraper(ABC):
         file_path = os.path.join(CONFIG_PATH, config_file_name)
 
         if not os.path.exists(file_path):
-            print(f"Warning: Selector config file not found: {file_path}")
+            logger.warning(f"Selector config file not found: {file_path}")
             return {}
 
         try:
@@ -69,10 +71,10 @@ class BaseScraper(ABC):
             # We expect shop_name_key to be the key in the JSON file.
             return data.get(shop_name_key, {})
         except json.JSONDecodeError:
-            print(f"Error: Could not decode JSON from {file_path}")
+            logger.error(f"Could not decode JSON from {file_path}")
             return {}
         except Exception as e:
-            print(f"Error loading selector config file {file_path}: {e}")
+            logger.exception(f"Error loading selector config file {file_path}:")
             return {}
 
     def fetch_page_content(self, url: str) -> Optional[str]:
@@ -83,14 +85,14 @@ class BaseScraper(ABC):
         request_headers = self.base_headers.copy()
         request_headers["User-Agent"] = get_random_user_agent()
 
-        # print(f"Fetching {url} with User-Agent: {request_headers['User-Agent']}") # For debugging
+        logger.debug(f"Fetching {url} with User-Agent: {request_headers['User-Agent']}")
         try:
             response = requests.get(url, headers=request_headers, timeout=10)
             response.raise_for_status()  # Raises an HTTPError for bad responses (4XX or 5XX)
+            logger.debug(f"Successfully fetched URL {url}, status {response.status_code}")
             return response.text
         except requests.exceptions.RequestException as e:
-            print(f"Error fetching URL {url}: {e}")
-            # Consider more sophisticated logging here
+            logger.error(f"Error fetching URL {url}: {e}")
             return None
 
     def _clean_price_string(self, price_str: str) -> float:
@@ -105,8 +107,7 @@ class BaseScraper(ABC):
         try:
             return float(cleaned_price)
         except ValueError:
-            # Handle cases like empty strings or improperly formatted numbers after cleaning
-            print(f"Warning: Could not convert cleaned price string '{cleaned_price}' to float.")
+            logger.warning(f"Could not convert cleaned price string '{cleaned_price}' (original: '{price_str}') to float.")
             return 0.0
 
 
@@ -133,12 +134,14 @@ class BaseScraper(ABC):
         html_content = self.fetch_page_content(product_url)
         if html_content:
             try:
+                logger.debug(f"Parsing product data for {product_url} from {self.shop_name}")
                 return self.parse_product_data(html_content, product_url)
             except Exception as e:
-                print(f"Error parsing product data for {product_url} from {self.shop_name}: {e}")
-                # Log this error appropriately
+                logger.exception(f"Error parsing product data for {product_url} from {self.shop_name}:")
                 return None
-        return None
+        else:
+            logger.warning(f"No HTML content fetched for {product_url}, cannot parse.")
+            return None
 
 if __name__ == '__main__':
     # This is for basic illustration; direct instantiation of BaseScraper will fail

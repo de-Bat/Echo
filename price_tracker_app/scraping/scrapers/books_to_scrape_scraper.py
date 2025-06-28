@@ -1,8 +1,11 @@
 from bs4 import BeautifulSoup
 from typing import Optional
 import re
+import logging # Added for logging
 
 from price_tracker_app.scraping.base_scraper import BaseScraper, ScrapeResult
+
+logger = logging.getLogger(__name__)
 
 class BooksToScrapeScraper(BaseScraper):
     """
@@ -28,7 +31,9 @@ class BooksToScrapeScraper(BaseScraper):
             if name_element:
                 result.product_name = name_element.get_text(strip=True)
             else:
-                print(f"Warning: Product name element not found using selector '{name_selector}' on {product_url}")
+                logger.warning(f"Product name element not found using selector '{name_selector}' on {product_url} for shop {self.SHOP_NAME}")
+        else:
+            logger.warning(f"Product name selector not configured for shop {self.SHOP_NAME}")
 
         # Extract Price and Currency
         price_selector = self.selectors.get("price")
@@ -48,7 +53,9 @@ class BooksToScrapeScraper(BaseScraper):
                     result.currency = "USD"
                 # Add more currency detections if needed
             else:
-                print(f"Warning: Price element not found using selector '{price_selector}' on {product_url}")
+                logger.warning(f"Price element not found using selector '{price_selector}' on {product_url} for shop {self.SHOP_NAME}")
+        else:
+            logger.warning(f"Price selector not configured for shop {self.SHOP_NAME}")
 
         # Extract Availability (Stock Status)
         availability_selector = self.selectors.get("availability")
@@ -70,7 +77,9 @@ class BooksToScrapeScraper(BaseScraper):
                 # if count_match:
                 #     result.stock_count = int(count_match.group(1))
             else:
-                print(f"Warning: Availability element not found using selector '{availability_selector}' on {product_url}")
+                logger.warning(f"Availability element not found using selector '{availability_selector}' on {product_url} for shop {self.SHOP_NAME}")
+        else:
+            logger.warning(f"Availability selector not configured for shop {self.SHOP_NAME}")
 
         # Extract Product Description (Optional)
         # description_selector = self.selectors.get("product_description")
