@@ -4,5 +4,6 @@ scikit-learn
 pydantic
 sqlalchemy
 click # For CLI
+PySocks # For SOCKS proxy support with requests
 # Flask or Django will be added later if a web UI is decided upon
 # PyTorch or TensorFlow will be added if a more complex AI model is needed

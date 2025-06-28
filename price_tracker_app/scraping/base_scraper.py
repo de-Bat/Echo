@@ -13,7 +13,12 @@ from price_tracker_app.scraping import get_random_user_agent # Updated import
 from price_tracker_app.core.models import PriceEntry # For type hinting eventually
 
 logger = logging.getLogger(__name__)
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "shop_configs")
+SHOP_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "shop_configs")
+# Assuming proxy_config.json is in the project root, relative to where the app is typically run from.
+# This path might need adjustment based on actual execution context.
+# For robustness, an absolute path derived from a known root or env var would be better in a complex app.
+PROXY_CONFIG_FILE_PATH = "proxy_config.json"
+
 
 class ScrapeResult(BaseModel): # Using Pydantic for structured result
     product_name: Optional[str] = None
@@ -29,14 +34,11 @@ class BaseScraper(ABC):
     """
     def __init__(self, shop_name: str, shop_home_url: str):
         self.shop_name = shop_name
-        self.shop_home_url = shop_home_url # For reference, not directly used in every scrape
+        self.shop_home_url = shop_home_url
         self.selectors = self._load_shop_selectors(shop_name)
         if not self.selectors:
-            # Try to load with shop_name as key within a generic file if specific file not found
-            # This is a fallback or alternative strategy: load from a single large JSON.
-            # For now, we stick to one-file-per-shop.
-            raise ValueError(f"No selectors found for shop: {shop_name}. Ensure '{shop_name.lower()}.json' exists in shop_configs or '{shop_name}' key is in a general config.")
-        # User-Agent will be set per request in fetch_page_content
+            raise ValueError(f"No selectors found for shop: {shop_name}. Ensure '{shop_name.lower()}.json' exists in {SHOP_CONFIG_PATH} or '{shop_name}' key is in a general config.")
+
         self.base_headers = {
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
             "Accept-Language": "en-US,en;q=0.9",
@@ -49,6 +51,41 @@ class BaseScraper(ABC):
             "Sec-Fetch-User": "?1",
             "Cache-Control": "max-age=0",
         }
+        self.proxies_enabled = False
+        self.proxy_list = []
+        self.current_proxy_index = 0 # For rotation
+        self._load_proxy_config()
+
+
+    def _load_proxy_config(self):
+        if not os.path.exists(PROXY_CONFIG_FILE_PATH):
+            logger.info(f"Proxy config file '{PROXY_CONFIG_FILE_PATH}' not found. Proxies will be disabled.")
+            self.proxies_enabled = False
+            return
+
+        try:
+            with open(PROXY_CONFIG_FILE_PATH, 'r') as f:
+                config = json.load(f)
+
+            self.proxies_enabled = config.get("enable_proxies", False)
+            if self.proxies_enabled:
+                self.proxy_list = config.get("proxies", [])
+                if not self.proxy_list:
+                    logger.warning("Proxies are enabled, but the proxy list is empty in config. Disabling proxies.")
+                    self.proxies_enabled = False
+                else:
+                    logger.info(f"Loaded {len(self.proxy_list)} proxies. Proxy usage is enabled.")
+                    # Could implement different rotation strategies based on "rotate_proxies"
+                    # For now, we'll just pick one or rotate.
+            else:
+                logger.info("Proxy usage is disabled via config file.")
+
+        except json.JSONDecodeError:
+            logger.error(f"Error decoding JSON from proxy config file '{PROXY_CONFIG_FILE_PATH}'. Proxies disabled.")
+            self.proxies_enabled = False
+        except Exception as e:
+            logger.exception(f"Error loading proxy config file '{PROXY_CONFIG_FILE_PATH}':")
+            self.proxies_enabled = False
 
 
     def _load_shop_selectors(self, shop_name_key: str) -> Dict:
@@ -56,7 +93,6 @@ class BaseScraper(ABC):
         Loads selectors for a given shop from a JSON file named '[shop_name_key.lower()].json'
         The JSON file should contain an object where the key is shop_name_key.
         """
-        # Normalize shop_name_key for filename (e.g., "ExampleShop" -> "exampleshop.json")
         config_file_name = f"{shop_name_key.lower()}.json"
         file_path = os.path.join(CONFIG_PATH, config_file_name)
 
@@ -67,8 +103,6 @@ class BaseScraper(ABC):
         try:
             with open(file_path, 'r') as f:
                 data = json.load(f)
-            # The JSON structure is {"ShopName": {"selector1": "value1", ...}}
-            # We expect shop_name_key to be the key in the JSON file.
             return data.get(shop_name_key, {})
         except json.JSONDecodeError:
             logger.error(f"Could not decode JSON from {file_path}")
@@ -77,22 +111,48 @@ class BaseScraper(ABC):
             logger.exception(f"Error loading selector config file {file_path}:")
             return {}
 
+    def _get_next_proxy(self) -> Optional[str]:
+        """Rotates through the proxy list and returns the next proxy."""
+        if not self.proxies_enabled or not self.proxy_list:
+            return None
+
+        proxy = self.proxy_list[self.current_proxy_index]
+        self.current_proxy_index = (self.current_proxy_index + 1) % len(self.proxy_list)
+        logger.debug(f"Using proxy: {proxy} (index {self.current_proxy_index -1})")
+        return proxy
+
     def fetch_page_content(self, url: str) -> Optional[str]:
         """
-        Fetches the HTML content of a given URL.
+        Fetches the HTML content of a given URL, optionally using a proxy.
         Returns the content as a string, or None if an error occurs.
         """
         request_headers = self.base_headers.copy()
         request_headers["User-Agent"] = get_random_user_agent()
 
-        logger.debug(f"Fetching {url} with User-Agent: {request_headers['User-Agent']}")
+        proxies_to_use = None
+        if self.proxies_enabled and self.proxy_list:
+            chosen_proxy = self._get_next_proxy()
+            if chosen_proxy:
+                proxies_to_use = {
+                    "http": chosen_proxy,
+                    "https": chosen_proxy,
+                }
+                logger.debug(f"Attempting fetch for {url} using proxy: {chosen_proxy}")
+
+        if not proxies_to_use:
+            logger.debug(f"Attempting fetch for {url} without proxy.")
+
         try:
-            response = requests.get(url, headers=request_headers, timeout=10)
-            response.raise_for_status()  # Raises an HTTPError for bad responses (4XX or 5XX)
-            logger.debug(f"Successfully fetched URL {url}, status {response.status_code}")
+            response = requests.get(url, headers=request_headers, proxies=proxies_to_use, timeout=20) # Increased timeout for proxies
+            response.raise_for_status()
+            logger.info(f"Successfully fetched URL {url}, status {response.status_code}" + (f" via proxy {chosen_proxy}" if proxies_to_use else ""))
             return response.text
         except requests.exceptions.RequestException as e:
-            logger.error(f"Error fetching URL {url}: {e}")
+            proxy_msg = f" via proxy {chosen_proxy}" if proxies_to_use and chosen_proxy else " (direct connection)"
+            logger.error(f"Error fetching URL {url}{proxy_msg}: {e}")
+            # TODO: Implement more sophisticated error handling for proxies, e.g.,
+            # - Mark proxy as bad temporarily or permanently
+            # - Retry with a different proxy or without proxy
             return None
 
     def _clean_price_string(self, price_str: str) -> float:

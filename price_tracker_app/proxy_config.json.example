@@ -1,0 +1,14 @@
+{
+    "proxies": [
+        "http://username:password@proxyserver.com:port",
+        "https://username:password@proxyserver.com:port",
+        "socks5://username:password@proxyserver.com:port"
+    ],
+    "rotate_proxies": true,
+    "enable_proxies": false
+}
+// Notes:
+// - Replace with your actual proxy details in a copied 'proxy_config.json' file.
+// - For SOCKS proxies (socks5://), ensure PySocks is installed (pip install PySocks).
+// - "rotate_proxies": If true, will cycle through the list. If false, will use the first one (or implement other selection strategy).
+// - "enable_proxies": Global switch to turn proxy usage on or off. If false, scrapers will not use proxies even if listed.
