@@ -5,5 +5,7 @@ pydantic
 sqlalchemy
 click # For CLI
 PySocks # For SOCKS proxy support with requests
+celery
+redis # For Celery message broker
 # Flask or Django will be added later if a web UI is decided upon
 # PyTorch or TensorFlow will be added if a more complex AI model is needed

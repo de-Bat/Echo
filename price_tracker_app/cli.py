@@ -325,8 +325,63 @@ def get_recommendation(item_identifier: str):
 if __name__ == "__main__":
     cli()
 
-# --- Track All Command ---
-@cli.command("track-all")
+# --- Celery Task CLI Group ---
+@cli.group("task")
+def task_group():
+    """Manage and trigger Celery tasks."""
+    pass
+
+@task_group.command("trigger-track-all")
+@click.option("--delay-between-tasks", type=float, default=0.1, help="Delay in seconds between dispatching individual URL tracking tasks within the main task.", show_default=True)
+def trigger_track_all_task_command(delay_between_tasks: float):
+    """Manually triggers the task to schedule tracking for all items."""
+    logger = logging.getLogger(__name__)
+    try:
+        from price_tracker_app.tasks import schedule_all_items_tracking_task
+        logger.info(f"CLI: Manually triggering 'schedule_all_items_tracking_task' with inter_task_delay_seconds={delay_between_tasks}.")
+        # .delay() is a shortcut for .apply_async()
+        task_result = schedule_all_items_tracking_task.delay(inter_task_delay_seconds=delay_between_tasks)
+        click.secho(f"Task 'schedule_all_items_tracking_task' dispatched. Task ID: {task_result.id}", fg="blue")
+        logger.info(f"Task 'schedule_all_items_tracking_task' dispatched via CLI. Task ID: {task_result.id}")
+    except ImportError:
+        logger.error("Could not import tasks. Ensure Celery app and tasks are correctly defined.")
+        click.secho("Error: Could not import Celery tasks.", fg="red")
+    except Exception as e:
+        logger.exception("Error dispatching 'schedule_all_items_tracking_task':")
+        click.secho(f"Error dispatching task: {e}", fg="red")
+
+@task_group.command("trigger-single-url")
+@click.option("--item-id", "item_id_str", required=True, help="UUID of the item.")
+@click.option("--shop-id", "shop_id_str", required=True, help="UUID of the shop.")
+@click.option("--url", "product_url", required=True, help="Product URL to track.")
+def trigger_single_url_task_command(item_id_str: str, shop_id_str: str, product_url: str):
+    """Manually triggers a tracking task for a single product URL."""
+    logger = logging.getLogger(__name__)
+    logger.info(f"CLI: Manually triggering 'track_single_url_task' for ItemID='{item_id_str}', ShopID='{shop_id_str}', URL='{product_url}'")
+    try:
+        # Validate UUIDs before dispatching (optional, task itself also validates)
+        try:
+            uuid.UUID(item_id_str)
+            uuid.UUID(shop_id_str)
+        except ValueError:
+            logger.error(f"Invalid UUID format provided: item_id='{item_id_str}', shop_id='{shop_id_str}'")
+            click.secho("Error: Invalid UUID format for item-id or shop-id.", fg="red")
+            return
+
+        from price_tracker_app.tasks import track_single_url_task
+        task_result = track_single_url_task.delay(item_id_str, shop_id_str, product_url)
+        click.secho(f"Task 'track_single_url_task' dispatched for URL '{product_url}'. Task ID: {task_result.id}", fg="blue")
+        logger.info(f"Task 'track_single_url_task' dispatched via CLI for URL '{product_url}'. Task ID: {task_result.id}")
+    except ImportError:
+        logger.error("Could not import tasks. Ensure Celery app and tasks are correctly defined.")
+        click.secho("Error: Could not import Celery tasks.", fg="red")
+    except Exception as e:
+        logger.exception(f"Error dispatching 'track_single_url_task' for URL '{product_url}':")
+        click.secho(f"Error dispatching task: {e}", fg="red")
+
+
+# --- Track All Command (Direct, Non-Celery for comparison/backup) ---
+@cli.command("track-all-direct") # Renamed to avoid confusion with Celery task trigger
 @click.option("--delay-per-url", type=float, default=1.0, help="Delay in seconds after processing each URL.", show_default=True)
 @click.option("--delay-per-item", type=float, default=5.0, help="Delay in seconds after processing all URLs for an item.", show_default=True)
 def track_all_items(delay_per_url: float, delay_per_item: float):
