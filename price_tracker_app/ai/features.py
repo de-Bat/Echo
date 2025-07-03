@@ -5,11 +5,12 @@ from datetime import datetime, timedelta
 import statistics
 import uuid # Added for PriceEntry mock data in __main__
 
-# Assuming core_models.PriceEntry has 'timestamp' and 'total_price' (or 'price')
+# Assuming core_models.PriceEntry has 'timestamp', 'primary_value', and 'adjusted_value'
 from price_tracker_app.core.models import PriceEntry # For type hinting
 
 # --- Configuration for Sale Events ---
 # This should ideally be more dynamic or loaded from a config file.
+# Sale events are typically relevant for monetary items.
 # For now, a simple list of (month, day) tuples for recurring sales.
 # More complex sales (e.g., Easter) would need more logic.
 KNOWN_SALE_DATES_ANNUAL = [
@@ -59,34 +60,38 @@ def days_since_last_significant_drop(price_entries: List[PriceEntry], drop_perce
 
     last_significant_drop_date: Optional[datetime] = None
 
-    # Iterate backwards from the second to last entry
     for i in range(len(price_entries) - 2, -1, -1):
         current_entry = price_entries[i+1]
         previous_entry = price_entries[i]
 
-        if current_entry.total_price is None or previous_entry.total_price is None:
-            continue # Skip if price data is missing
+        # Use adjusted_value for comparison, as it's the most comparable "final" value
+        current_val = current_entry.adjusted_value
+        previous_val = previous_entry.adjusted_value
 
-        change = calculate_price_change_percentage(current_entry.total_price, previous_entry.total_price)
-        if change is not None and change < -abs(drop_percentage_threshold): # Negative change is a drop
+        if current_val is None or previous_val is None:
+            continue
+
+        change = calculate_price_change_percentage(current_val, previous_val)
+        if change is not None and change < -abs(drop_percentage_threshold):
             last_significant_drop_date = current_entry.timestamp
-            break # Found the most recent significant drop
+            break
 
     if last_significant_drop_date:
-        # Assuming the "current" date is the timestamp of the latest price entry
         current_date = price_entries[-1].timestamp
         return (current_date - last_significant_drop_date).days
-    return None # No significant drop found or not enough data
+    return None
 
-def days_to_next_known_sale(current_date: datetime, future_look_days: int = 90) -> Optional[int]:
+def days_to_next_known_sale(current_date: datetime, item_is_monetary: bool, future_look_days: int = 90) -> Optional[int]:
     """
-    Calculates the number of days from current_date to the next known sale event
-    within the future_look_days window.
+    Calculates the number of days from current_date to the next known sale event.
+    Only relevant if item_is_monetary is True.
     """
+    if not item_is_monetary:
+        return None # Sales events not applicable for non-monetary items
+
     current_year = current_date.year
     sale_events = get_known_sale_events_for_year(current_year)
-    # Also check next year's events if near end of year
-    if current_date.month > (12 - future_look_days // 30) : # If in last few months
+    if current_date.month > (12 - future_look_days // 30):
          sale_events.extend(get_known_sale_events_for_year(current_year + 1))
 
     upcoming_sales = [event for event in sale_events if event > current_date]
@@ -179,59 +184,53 @@ def extract_features(price_history: List[PriceEntry], current_price_entry: Price
 if __name__ == "__main__":
     print("--- Testing Feature Extraction Functions ---")
 
-    # Mock PriceEntry data (ensure timestamps are datetime objects)
-    mock_prices = [
-        PriceEntry(id=uuid.uuid4(), item_id=uuid.uuid4(), shop_id=uuid.uuid4(), timestamp=datetime(2023, 1, 1, 10, 0, 0), price=100.0, total_price=100.0, url_scraped_from="http://example.com/p1"),
-        PriceEntry(id=uuid.uuid4(), item_id=uuid.uuid4(), shop_id=uuid.uuid4(), timestamp=datetime(2023, 1, 2, 10, 0, 0), price=102.0, total_price=102.0, url_scraped_from="http://example.com/p1"),
-        PriceEntry(id=uuid.uuid4(), item_id=uuid.uuid4(), shop_id=uuid.uuid4(), timestamp=datetime(2023, 1, 3, 10, 0, 0), price=101.0, total_price=101.0, url_scraped_from="http://example.com/p1"),
-        PriceEntry(id=uuid.uuid4(), item_id=uuid.uuid4(), shop_id=uuid.uuid4(), timestamp=datetime(2023, 1, 4, 10, 0, 0), price=95.0,  total_price=95.0,  url_scraped_from="http://example.com/p1"), # 5.9% drop from 101
-        PriceEntry(id=uuid.uuid4(), item_id=uuid.uuid4(), shop_id=uuid.uuid4(), timestamp=datetime(2023, 1, 5, 10, 0, 0), price=96.0,  total_price=96.0,  url_scraped_from="http://example.com/p1"),
-        PriceEntry(id=uuid.uuid4(), item_id=uuid.uuid4(), shop_id=uuid.uuid4(), timestamp=datetime(2023, 1, 6, 10, 0, 0), price=90.0,  total_price=90.0,  url_scraped_from="http://example.com/p1"), # 6.25% drop from 96
-        PriceEntry(id=uuid.uuid4(), item_id=uuid.uuid4(), shop_id=uuid.uuid4(), timestamp=datetime(2023, 1, 7, 10, 0, 0), price=88.0,  total_price=88.0,  url_scraped_from="http://example.com/p1"), # Current price
+    # Mock PriceEntry data
+    # For monetary item
+    mock_monetary_entries = [
+        PriceEntry(id=uuid.uuid4(), item_id=uuid.uuid4(), shop_id=uuid.uuid4(), timestamp=datetime(2023, 1, 1), primary_value=100.0, value_currency="USD", url_scraped_from="http://example.com/p1"),
+        PriceEntry(id=uuid.uuid4(), item_id=uuid.uuid4(), shop_id=uuid.uuid4(), timestamp=datetime(2023, 1, 2), primary_value=102.0, value_currency="USD", url_scraped_from="http://example.com/p1"),
+        PriceEntry(id=uuid.uuid4(), item_id=uuid.uuid4(), shop_id=uuid.uuid4(), timestamp=datetime(2023, 1, 3), primary_value=101.0, value_currency="USD", url_scraped_from="http://example.com/p1"),
+        PriceEntry(id=uuid.uuid4(), item_id=uuid.uuid4(), shop_id=uuid.uuid4(), timestamp=datetime(2023, 1, 4), primary_value=95.0,  value_currency="USD", url_scraped_from="http://example.com/p1"),
+        PriceEntry(id=uuid.uuid4(), item_id=uuid.uuid4(), shop_id=uuid.uuid4(), timestamp=datetime(2023, 1, 5), primary_value=96.0,  value_currency="USD", url_scraped_from="http://example.com/p1"),
+        PriceEntry(id=uuid.uuid4(), item_id=uuid.uuid4(), shop_id=uuid.uuid4(), timestamp=datetime(2023, 1, 6), primary_value=90.0,  value_currency="USD", url_scraped_from="http://example.com/p1"),
+        PriceEntry(id=uuid.uuid4(), item_id=uuid.uuid4(), shop_id=uuid.uuid4(), timestamp=datetime(2023, 1, 7), primary_value=88.0,  value_currency="USD", url_scraped_from="http://example.com/p1"),
     ]
+    for entry in mock_monetary_entries: entry.calculate_adjusted_value() # Calculate adjusted_value
 
-    # Test moving average
-    prices_only = [p.total_price for p in mock_prices]
-    print(f"Prices: {prices_only}")
-    print(f"Moving Average (3-day window): {calculate_moving_average(prices_only, 3)}") # Expected: (96+90+88)/3 = 91.33
-    print(f"Moving Average (7-day window): {calculate_moving_average(prices_only, 7)}") # Expected: mean of all
+    # For non-monetary item
+    mock_non_monetary_entries = [
+        PriceEntry(id=uuid.uuid4(), item_id=uuid.uuid4(), shop_id=uuid.uuid4(), timestamp=datetime(2023, 1, 1), primary_value=10.0, value_currency=None, url_scraped_from="http://example.com/q1"),
+        PriceEntry(id=uuid.uuid4(), item_id=uuid.uuid4(), shop_id=uuid.uuid4(), timestamp=datetime(2023, 1, 2), primary_value=12.0, value_currency=None, url_scraped_from="http://example.com/q1"),
+    ]
+    for entry in mock_non_monetary_entries: entry.calculate_adjusted_value()
 
-    # Test price change percentage
-    print(f"Price change from 100 to 88: {calculate_price_change_percentage(88.0, 100.0)}%") # Expected: -12.0
+    logger.info("--- Testing Feature Extraction Functions ---")
 
-    # Test days since last significant drop
-    # The last significant drop (>-5%) is from 96 to 90 on 2023-01-06. Current date is 2023-01-07. So, 1 day.
-    # The drop from 101 to 95 on 2023-01-04 was also significant.
-    # days_since_last_significant_drop expects sorted list.
-    print(f"Days since last significant drop (threshold 5%): {days_since_last_significant_drop(mock_prices, 5.0)}")
+    values_only = [p.adjusted_value for p in mock_monetary_entries if p.adjusted_value is not None]
+    logger.info(f"Adjusted Values (Monetary): {values_only}")
+    logger.info(f"Moving Average (3-day window, Monetary): {calculate_moving_average(values_only, 3)}")
 
-    # Test days to next known sale
+    logger.info(f"Value change from 100 to 88: {calculate_price_change_percentage(88.0, 100.0)}%")
+
+    logger.info(f"Days since last significant drop (Monetary, threshold 5%): {days_since_last_significant_drop(mock_monetary_entries, 5.0)}")
+
     current_test_date = datetime(2023, 11, 1)
-    print(f"Days to next known sale from {current_test_date.date()}: {days_to_next_known_sale(current_test_date)}") # Expect 10 (to Nov 11)
-    current_test_date_dec = datetime(2023, 12, 20)
-    print(f"Days to next known sale from {current_test_date_dec.date()}: {days_to_next_known_sale(current_test_date_dec)}") # Expect 5 (to Dec 25)
-    current_test_date_late_dec = datetime(2023, 12, 28)
-    # Expects to find Jan 1 of next year
-    print(f"Days to next known sale from {current_test_date_late_dec.date()}: {days_to_next_known_sale(current_test_date_late_dec)}")
+    logger.info(f"Days to next known sale from {current_test_date.date()} (Monetary Item): {days_to_next_known_sale(current_test_date, item_is_monetary=True)}")
+    logger.info(f"Days to next known sale from {current_test_date.date()} (Non-Monetary Item): {days_to_next_known_sale(current_test_date, item_is_monetary=False)}")
 
 
-    # Test full feature extraction
-    print("\n--- Full Feature Extraction ---")
-    if mock_prices:
-        current_entry_for_features = mock_prices[-1]
-        # Pass all mock_prices as history, assuming it includes the current_entry as the last one.
-        extracted_ft = extract_features(mock_prices, current_entry_for_features)
-        print("Extracted Features:")
-        for k, v in extracted_ft.items():
-            print(f"  {k}: {v}")
+    logger.info("\n--- Full Feature Extraction (Monetary) ---")
+    if mock_monetary_entries:
+        current_entry_monetary = mock_monetary_entries[-1]
+        extracted_ft_monetary = extract_features(mock_monetary_entries, current_entry_monetary)
+        logger.info("Extracted Features (Monetary):")
+        for k, v in extracted_ft_monetary.items(): logger.info(f"  {k}: {v}")
 
-    print("\n--- Feature Extraction with Minimal History ---")
-    minimal_history = [mock_prices[-1]] # Only the current price
-    current_entry_minimal = minimal_history[0]
-    extracted_ft_minimal = extract_features(minimal_history, current_entry_minimal)
-    print("Extracted Features (Minimal History):")
-    for k, v in extracted_ft_minimal.items():
-        print(f"  {k}: {v}")
+    logger.info("\n--- Full Feature Extraction (Non-Monetary) ---")
+    if mock_non_monetary_entries:
+        current_entry_non_monetary = mock_non_monetary_entries[-1]
+        extracted_ft_non_monetary = extract_features(mock_non_monetary_entries, current_entry_non_monetary)
+        logger.info("Extracted Features (Non-Monetary):")
+        for k, v in extracted_ft_non_monetary.items(): logger.info(f"  {k}: {v}")
 
-    import uuid # Make sure uuid is imported for PriceEntry in main
-    print("\nDone testing features.py")
+    logger.info("\nDone testing features.py")

@@ -30,18 +30,26 @@ class PriceEntry(BaseModel):
     item_id: uuid.UUID # Foreign key to Item
     shop_id: uuid.UUID # Foreign key to Shop
     timestamp: datetime = datetime.now()
-    price: float # Base price of the item
-    currency: str = "USD" # Assuming USD for now, could be configurable
-    shipping_cost: Optional[float] = None
-    taxes: Optional[float] = None
-    total_price: Optional[float] = None # price + shipping + taxes
-    url_scraped_from: HttpUrl # The specific URL this price was found at
+    primary_value: float # Renamed from price. Can be monetary or other numeric value.
+    value_currency: Optional[str] = None # Renamed from currency. E.g., "USD", "GBP", or None if not applicable.
+    shipping_cost: Optional[float] = None # Applicable if primary_value is monetary
+    taxes: Optional[float] = None # Applicable if primary_value is monetary
+    adjusted_value: Optional[float] = None # Renamed from total_price. Calculated (primary_value + shipping + taxes) if monetary.
+    url_scraped_from: HttpUrl # The specific URL this value was found at
 
-    def calculate_total_price(self):
-        if self.price is not None:
-            self.total_price = self.price + (self.shipping_cost or 0) + (self.taxes or 0)
+    def calculate_adjusted_value(self):
+        """
+        Calculates the adjusted value. If the value is monetary (currency is set)
+        and shipping/taxes are present, it adds them. Otherwise, adjusted_value is same as primary_value.
+        """
+        if self.primary_value is not None:
+            if self.value_currency and (self.shipping_cost is not None or self.taxes is not None):
+                # Only add shipping/taxes if it's explicitly monetary and costs are present
+                self.adjusted_value = self.primary_value + (self.shipping_cost or 0) + (self.taxes or 0)
+            else:
+                self.adjusted_value = self.primary_value
         else:
-            self.total_price = None
+            self.adjusted_value = None
 
 class RecommendationAction(str):
     BUY = "BUY"
@@ -85,13 +93,27 @@ if __name__ == "__main__":
     price_info = PriceEntry(
         item_id=my_item.id,
         shop_id=amazon.id,
-        price=99.99,
+        primary_value=99.99, # Renamed
+        value_currency="USD", # Renamed
         shipping_cost=5.99,
         taxes=8.00,
         url_scraped_from="https://www.amazon.com/dp/B0EXAMPLE"
     )
-    price_info.calculate_total_price()
+    price_info.calculate_adjusted_value() # Renamed method
     print(price_info.model_dump_json(indent=2))
+
+    # Example for a non-monetary item
+    non_monetary_item = Item(name="Author Quotes", product_urls=[], target_shops_ids=[])
+    quote_value_entry = PriceEntry(
+        item_id=non_monetary_item.id,
+        shop_id=amazon.id, # Using amazon as dummy shop_id
+        primary_value=10.0, # e.g., number of quotes
+        value_currency=None, # Non-monetary
+        url_scraped_from="http://example.com/author/someauthor"
+    )
+    quote_value_entry.calculate_adjusted_value()
+    print(quote_value_entry.model_dump_json(indent=2))
+
 
     buy_recommendation = Recommendation(
         item_id=my_item.id,

@@ -1,83 +1,70 @@
 # price_tracker_app/ai/models/simple_heuristic_model.py
 
 from typing import Dict, Tuple
+import logging
 
 from price_tracker_app.core.models import RecommendationAction
 
+logger = logging.getLogger(__name__)
+
 class SimpleHeuristicModel:
     """
-    A simple heuristic-based model for price prediction recommendations.
+    A simple heuristic-based model for value prediction recommendations.
+    Adjusted to use generic 'value' instead of 'price'.
     """
-    # --- Configuration for Heuristics (can be tuned or moved to a config file) ---
-    # Buy if current price is X% below 30-day moving average
-    BUY_BELOW_MA30_PCT_THRESHOLD: float = -7.0  # e.g., -7.0 means 7% below MA
-    # Strong buy if current price is Y% below 30-day moving average
-    STRONG_BUY_BELOW_MA30_PCT_THRESHOLD: float = -15.0 # e.g., -15.0 means 15% below MA
+    # Config for Heuristics
+    BUY_BELOW_MA30_PCT_THRESHOLD: float = -7.0
+    STRONG_BUY_BELOW_MA30_PCT_THRESHOLD: float = -15.0
+    BUY_RECENT_DROP_PCT_THRESHOLD: float = -10.0
+    SALE_APPROACHING_DAYS_THRESHOLD: int = 14
 
-    # Buy if price dropped significantly (e.g., Z%) in the last few days
-    BUY_RECENT_DROP_PCT_THRESHOLD: float = -10.0 # e.g., -10% drop compared to 7-day MA
-
-    # Consider waiting if a known sale is approaching
-    SALE_APPROACHING_DAYS_THRESHOLD: int = 14 # Days within which a sale is "approaching"
-
-    # Default certainty and accuracy (can be adjusted based on rule strength)
-    DEFAULT_CERTAINTY: float = 0.60 # Base certainty for any heuristic rule match
-    DEFAULT_ACCURACY: float = 0.50  # Base accuracy (more like a placeholder for heuristics)
+    DEFAULT_CERTAINTY: float = 0.60
+    DEFAULT_ACCURACY: float = 0.50
 
     def __init__(self, config: Dict = None):
-        """
-        Initialize the model. Config can override default thresholds.
-        Example config: {"BUY_BELOW_MA30_PCT_THRESHOLD": -8.0}
-        """
         if config:
             for key, value in config.items():
-                if hasattr(self, key.upper()): # Ensure only existing attrs are set
+                if hasattr(self, key.upper()):
                     setattr(self, key.upper(), value)
 
         self.reasoning_priority = [
-            "STRONG_BUY_PRICE_VS_MA30",
-            "BUY_PRICE_VS_MA30",
+            "STRONG_BUY_VALUE_VS_MA30", # Renamed for clarity
+            "BUY_VALUE_VS_MA30",      # Renamed
             "BUY_RECENT_SIGNIFICANT_DROP",
-            "WAIT_SALE_APPROACHING",
-            "HOLD_STABLE_PRICE",
+            "WAIT_SALE_APPROACHING", # This rule should only apply if item_is_monetary
+            "HOLD_STABLE_VALUE",      # Renamed
         ]
 
     def predict(self, features: Dict[str, any]) -> Tuple[RecommendationAction, float, float, str]:
         """
         Makes a prediction based on the extracted features.
-
-        Args:
-            features: A dictionary of features (e.g., from ai.features.extract_features).
-
-        Returns:
-            A tuple containing:
-            - RecommendationAction (BUY, WAIT, HOLD)
-            - Accuracy rank (float, 0.0 to 1.0) - more of a confidence score for heuristics
-            - Certainty rank (float, 0.0 to 1.0) - how sure about the data/context
-            - Reasoning (str)
+        Features dictionary now includes 'current_value', 'item_is_monetary', etc.
         """
-        reasons = {} # Store reasons for potential actions
+        reasons = {}
+        item_is_monetary = features.get("item_is_monetary", False)
+        # Use "Value" for non-monetary items in reasoning, "Price" for monetary.
+        value_label = "Price" if item_is_monetary else "Value"
 
-        # --- Heuristic Rules ---
+        logger.debug(f"SimpleHeuristicModel predicting for features: {features}")
 
         # Rule 1: Strong Buy based on significant drop below 30-day MA
         if features.get("change_from_30d_avg_pct") is not None:
             if features["change_from_30d_avg_pct"] < self.STRONG_BUY_BELOW_MA30_PCT_THRESHOLD:
-                reasons["STRONG_BUY_PRICE_VS_MA30"] = (
+                reasons["STRONG_BUY_VALUE_VS_MA30"] = (
                     RecommendationAction.BUY,
-                    self.DEFAULT_ACCURACY + 0.2, # Higher accuracy for strong signal
+                    self.DEFAULT_ACCURACY + 0.2,
                     self.DEFAULT_CERTAINTY + 0.15,
-                    f"Price is {features['change_from_30d_avg_pct']:.1f}% below 30-day average (Threshold: {self.STRONG_BUY_BELOW_MA30_PCT_THRESHOLD}%) - Strong Buy Signal."
+                    f"{value_label} is {features['change_from_30d_avg_pct']:.1f}% below 30-day average (Threshold: {self.STRONG_BUY_BELOW_MA30_PCT_THRESHOLD}%) - Strong Buy Signal."
                 )
 
         # Rule 2: Buy based on drop below 30-day MA
         if features.get("change_from_30d_avg_pct") is not None:
             if features["change_from_30d_avg_pct"] < self.BUY_BELOW_MA30_PCT_THRESHOLD:
-                reasons["BUY_PRICE_VS_MA30"] = (
+                reasons["BUY_VALUE_VS_MA30"] = (
                     RecommendationAction.BUY,
                     self.DEFAULT_ACCURACY + 0.1,
                     self.DEFAULT_CERTAINTY + 0.1,
-                    f"Price is {features['change_from_30d_avg_pct']:.1f}% below 30-day average (Threshold: {self.BUY_BELOW_MA30_PCT_THRESHOLD}%)."
+                    f"{value_label} is {features['change_from_30d_avg_pct']:.1f}% below 30-day average (Threshold: {self.BUY_BELOW_MA30_PCT_THRESHOLD}%)."
                 )
 
         # Rule 3: Buy based on recent significant drop compared to 7-day MA
@@ -87,132 +74,109 @@ class SimpleHeuristicModel:
                     RecommendationAction.BUY,
                     self.DEFAULT_ACCURACY + 0.05,
                     self.DEFAULT_CERTAINTY + 0.05,
-                    f"Price recently dropped significantly: {features['change_from_7d_avg_pct']:.1f}% below 7-day average (Threshold: {self.BUY_RECENT_DROP_PCT_THRESHOLD}%)."
+                    f"{value_label} recently dropped significantly: {features['change_from_7d_avg_pct']:.1f}% below 7-day average (Threshold: {self.BUY_RECENT_DROP_PCT_THRESHOLD}%)."
                 )
 
-        # Rule 4: Wait if a sale is approaching
-        days_to_sale = features.get("days_to_next_sale")
-        if days_to_sale is not None and 0 <= days_to_sale <= self.SALE_APPROACHING_DAYS_THRESHOLD:
-            reasons["WAIT_SALE_APPROACHING"] = (
-                RecommendationAction.WAIT,
-                self.DEFAULT_ACCURACY + 0.1, # Higher accuracy as this is a known factor
-                self.DEFAULT_CERTAINTY + 0.1,
-                f"A known sale event is approaching in {days_to_sale} days. Consider waiting."
-            )
+        # Rule 4: Wait if a sale is approaching (only for monetary items)
+        if item_is_monetary: # This check is crucial
+            days_to_sale = features.get("days_to_next_sale")
+            if days_to_sale is not None and 0 <= days_to_sale <= self.SALE_APPROACHING_DAYS_THRESHOLD:
+                reasons["WAIT_SALE_APPROACHING"] = (
+                    RecommendationAction.WAIT,
+                    self.DEFAULT_ACCURACY + 0.1,
+                    self.DEFAULT_CERTAINTY + 0.1,
+                    f"A known sale event is approaching in {days_to_sale} days. Consider waiting."
+                )
 
         # --- Determine final recommendation based on priority ---
         for reason_key in self.reasoning_priority:
             if reason_key in reasons:
-                return reasons[reason_key] # Return the highest priority matched rule
+                logger.info(f"Heuristic matched: {reason_key} - Action: {reasons[reason_key][0].value}")
+                return reasons[reason_key]
 
-        # Default/Fallback Recommendation: HOLD or WAIT based on stability
-        # This part can be more nuanced. For now, a simple HOLD.
-        reasons["HOLD_STABLE_PRICE"] = (
+        # Default/Fallback Recommendation
+        reasons["HOLD_STABLE_VALUE"] = (
             RecommendationAction.HOLD,
-            self.DEFAULT_ACCURACY - 0.1, # Lower accuracy if no strong signals
+            self.DEFAULT_ACCURACY - 0.1,
             self.DEFAULT_CERTAINTY,
-            "Price is relatively stable or no strong buy/wait signals detected."
+            f"{value_label} is relatively stable or no strong buy/wait signals detected."
         )
-        return reasons["HOLD_STABLE_PRICE"]
+        logger.info(f"No specific heuristic matched. Defaulting to HOLD_STABLE_VALUE.")
+        return reasons["HOLD_STABLE_VALUE"]
 
 
 if __name__ == "__main__":
-    print("--- Testing SimpleHeuristicModel ---")
+    # Setup basic logging if run directly
+    from price_tracker_app.logging_config import setup_logging
+    setup_logging(level=logging.DEBUG)
+
+    logger.info("--- Testing SimpleHeuristicModel (Refactored for Generic Value) ---")
     model = SimpleHeuristicModel()
 
-    # Test Case 1: Strong Buy Signal (price well below 30d MA)
+    # Test Case 1: Strong Buy Signal (Monetary Item)
     features_strong_buy = {
-        "current_price": 80.0,
+        "item_is_monetary": True,
+        "current_value": 80.0,
         "moving_avg_30d": 100.0,
-        "change_from_30d_avg_pct": -20.0, # (80-100)/100 * 100 = -20%
+        "change_from_30d_avg_pct": -20.0,
         "moving_avg_7d": 85.0,
-        "change_from_7d_avg_pct": -5.88, # (80-85)/85 * 100
+        "change_from_7d_avg_pct": -5.88,
         "days_to_next_sale": 30
     }
     action, acc, cert, reason = model.predict(features_strong_buy)
-    print(f"\nTest Case 1 (Strong Buy):")
-    print(f"  Action: {action}, Accuracy: {acc:.2f}, Certainty: {cert:.2f}")
-    print(f"  Reason: {reason}")
+    logger.info(f"\nTest Case 1 (Strong Buy - Monetary): Action: {action.value}, Accuracy: {acc:.2f}, Certainty: {cert:.2f}, Reason: {reason}")
     assert action == RecommendationAction.BUY
 
-    # Test Case 2: Normal Buy Signal (price below 30d MA but not strongly)
-    features_buy = {
-        "current_price": 90.0,
+    # Test Case 2: Wait, Sale Approaching (Monetary Item)
+    features_wait_sale_monetary = {
+        "item_is_monetary": True,
+        "current_value": 90.0,
         "moving_avg_30d": 100.0,
-        "change_from_30d_avg_pct": -10.0, # -10%
-        "moving_avg_7d": 92.0,
-        "change_from_7d_avg_pct": -2.17,
-        "days_to_next_sale": 30
-    }
-    action, acc, cert, reason = model.predict(features_buy)
-    print(f"\nTest Case 2 (Normal Buy):")
-    print(f"  Action: {action}, Accuracy: {acc:.2f}, Certainty: {cert:.2f}")
-    print(f"  Reason: {reason}")
-    assert action == RecommendationAction.BUY
-
-    # Test Case 3: Wait, Sale Approaching (overrides a weak buy signal)
-    features_wait_sale = {
-        "current_price": 90.0, # Matches BUY_PRICE_VS_MA30
-        "moving_avg_30d": 100.0,
-        "change_from_30d_avg_pct": -10.0,
+        "change_from_30d_avg_pct": -10.0, # Qualifies for BUY_VALUE_VS_MA30
         "moving_avg_7d": 92.0,
         "change_from_7d_avg_pct": -2.17,
         "days_to_next_sale": 5 # Sale is very soon
     }
-    action, acc, cert, reason = model.predict(features_wait_sale)
-    print(f"\nTest Case 3 (Wait - Sale Approaching):")
-    print(f"  Action: {action}, Accuracy: {acc:.2f}, Certainty: {cert:.2f}")
-    print(f"  Reason: {reason}")
-    # The order in reasoning_priority matters here. If sale check is high, it will be WAIT.
-    # Current priority: StrongBuy, BuyMA30, BuyRecentDrop, WaitSale. So BuyMA30 will win.
-    # Let's adjust priority for testing this specific case or refine logic.
-    # For now, given current priority, this would be BUY.
-    # To make WAIT win, WAIT_SALE_APPROACHING needs higher priority than BUY_PRICE_VS_MA30.
-    # Let's test with WAIT_SALE_APPROACHING having higher priority for this scenario.
-
-    custom_priority_model = SimpleHeuristicModel()
-    custom_priority_model.reasoning_priority = [
-            "STRONG_BUY_PRICE_VS_MA30",
+    # To ensure WAIT_SALE_APPROACHING wins, it needs higher priority
+    model_sale_priority = SimpleHeuristicModel()
+    model_sale_priority.reasoning_priority = [
             "WAIT_SALE_APPROACHING", # Moved up
-            "BUY_PRICE_VS_MA30",
+            "STRONG_BUY_VALUE_VS_MA30",
+            "BUY_VALUE_VS_MA30",
             "BUY_RECENT_SIGNIFICANT_DROP",
-            "HOLD_STABLE_PRICE",
+            "HOLD_STABLE_VALUE",
     ]
-    action_custom, acc_custom, cert_custom, reason_custom = custom_priority_model.predict(features_wait_sale)
-    print(f"\nTest Case 3 (Wait - Sale Approaching, Custom Priority):")
-    print(f"  Action: {action_custom}, Accuracy: {acc_custom:.2f}, Certainty: {cert_custom:.2f}")
-    print(f"  Reason: {reason_custom}")
-    assert action_custom == RecommendationAction.WAIT
+    action_sp, acc_sp, cert_sp, reason_sp = model_sale_priority.predict(features_wait_sale_monetary)
+    logger.info(f"\nTest Case 2 (Wait - Sale, Monetary, Custom Priority): Action: {action_sp.value}, Accuracy: {acc_sp:.2f}, Certainty: {cert_sp:.2f}, Reason: {reason_sp}")
+    assert action_sp == RecommendationAction.WAIT
 
-
-    # Test Case 4: Hold (no strong signals)
-    features_hold = {
-        "current_price": 98.0,
-        "moving_avg_30d": 100.0,
-        "change_from_30d_avg_pct": -2.0, # Not low enough
-        "moving_avg_7d": 99.0,
-        "change_from_7d_avg_pct": -1.0, # Not low enough
-        "days_to_next_sale": 60 # Sale not soon
+    # Test Case 3: Hold (Non-Monetary Item, e.g. quote count)
+    features_hold_non_monetary = {
+        "item_is_monetary": False,
+        "current_value": 10.0, # e.g., 10 quotes
+        "moving_avg_30d": 9.0,
+        "change_from_30d_avg_pct": 11.1, # Value increased
+        "moving_avg_7d": 10.0,
+        "change_from_7d_avg_pct": 0.0,
+        "days_to_next_sale": None # Not applicable or not found
     }
-    action, acc, cert, reason = model.predict(features_hold)
-    print(f"\nTest Case 4 (Hold):")
-    print(f"  Action: {action}, Accuracy: {acc:.2f}, Certainty: {cert:.2f}")
-    print(f"  Reason: {reason}")
-    assert action == RecommendationAction.HOLD
+    action_nm, acc_nm, cert_nm, reason_nm = model.predict(features_hold_non_monetary)
+    logger.info(f"\nTest Case 3 (Hold - Non-Monetary): Action: {action_nm.value}, Accuracy: {acc_nm:.2f}, Certainty: {cert_nm:.2f}, Reason: {reason_nm}")
+    assert action_nm == RecommendationAction.HOLD
 
-    # Test Case 5: Buy due to recent drop, even if MA comparison isn't strong
-    features_recent_drop_buy = {
-        "current_price": 90.0,
-        "moving_avg_30d": 95.0, # Only -5.2% vs MA30 (might not trigger BUY_PRICE_VS_MA30)
-        "change_from_30d_avg_pct": -5.26,
-        "moving_avg_7d": 105.0, # Current price is much lower than 7d MA
-        "change_from_7d_avg_pct": -14.28, # (90-105)/105 * 100 = -14.28% (triggers BUY_RECENT_SIGNIFICANT_DROP)
-        "days_to_next_sale": 30
+    # Test Case 4: Buy (Non-Monetary Item, value dropped significantly)
+    features_buy_non_monetary = {
+        "item_is_monetary": False,
+        "current_value": 5.0, # e.g., quote count dropped from 10 to 5
+        "moving_avg_30d": 10.0,
+        "change_from_30d_avg_pct": -50.0, # Significant drop
+        "moving_avg_7d": 8.0,
+        "change_from_7d_avg_pct": -37.5,
+        "days_to_next_sale": None
     }
-    action, acc, cert, reason = model.predict(features_recent_drop_buy)
-    print(f"\nTest Case 5 (Buy - Recent Drop):")
-    print(f"  Action: {action}, Accuracy: {acc:.2f}, Certainty: {cert:.2f}")
-    print(f"  Reason: {reason}")
-    assert action == RecommendationAction.BUY
+    action_buy_nm, acc_buy_nm, cert_buy_nm, reason_buy_nm = model.predict(features_buy_non_monetary)
+    logger.info(f"\nTest Case 4 (Buy - Non-Monetary, Value Drop): Action: {action_buy_nm.value}, Accuracy: {acc_buy_nm:.2f}, Certainty: {cert_buy_nm:.2f}, Reason: {reason_buy_nm}")
+    assert action_buy_nm == RecommendationAction.BUY
 
-    print("\nSimpleHeuristicModel tests completed.")
+
+    logger.info("\nSimpleHeuristicModel tests (refactored) completed.")

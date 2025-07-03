@@ -1,0 +1,9 @@
+{
+    "QuotesToScrape": {
+        "author_name": "div.author-details h3.author-title",
+        "quote_block": "div.quote",
+        "quote_text_inner": "span.text",
+        "quote_author_inner": "small.author",
+        "quote_tags_inner": "div.tags a.tag"
+    }
+}

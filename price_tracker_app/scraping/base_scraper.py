@@ -22,8 +22,8 @@ PROXY_CONFIG_FILE_PATH = "proxy_config.json"
 
 class ScrapeResult(BaseModel): # Using Pydantic for structured result
     product_name: Optional[str] = None
-    price: Optional[float] = None
-    currency: Optional[str] = "USD" # Default currency
+    primary_value: Optional[float] = None # Renamed from price
+    value_currency: Optional[str] = None  # Renamed from currency, and truly optional
     shipping_cost: Optional[float] = None
     stock_status: Optional[str] = None
     # Potentially add: product_description, etc.

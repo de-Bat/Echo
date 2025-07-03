@@ -100,11 +100,11 @@ class PriceEntry(Base):
     shop_id = Column(GUID, ForeignKey("shops.id"), nullable=False, index=True)
 
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
-    price = Column(Float, nullable=False)
-    currency = Column(String(3), default="USD", nullable=False) # e.g., "USD", "EUR"
+    primary_value = Column(Float, nullable=False) # Renamed from price
+    value_currency = Column(String(10), nullable=True) # Renamed from currency, increased length, nullable
     shipping_cost = Column(Float, nullable=True)
     taxes = Column(Float, nullable=True)
-    _total_price = Column("total_price", Float, nullable=True) # Backing field for total_price
+    _adjusted_value = Column("adjusted_value", Float, nullable=True) # Renamed from _total_price
 
     url_scraped_from = Column(Text, nullable=False) # HttpUrl validated by Pydantic
 
@@ -112,23 +112,34 @@ class PriceEntry(Base):
     shop = relationship("Shop", back_populates="price_entries")
 
     @hybrid_property
-    def total_price(self):
-        if self._total_price is not None:
-            return self._total_price
-        if self.price is not None:
-            return self.price + (self.shipping_cost or 0) + (self.taxes or 0)
+    def adjusted_value(self):
+        if self._adjusted_value is not None:
+            return self._adjusted_value # Use pre-calculated if available
+
+        if self.primary_value is not None:
+            # Only add shipping/taxes if currency is present (implies monetary value)
+            if self.value_currency and (self.shipping_cost is not None or self.taxes is not None):
+                return self.primary_value + (self.shipping_cost or 0) + (self.taxes or 0)
+            return self.primary_value # For non-monetary or when no shipping/taxes
         return None
 
-    @total_price.setter
-    def total_price(self, value):
-        self._total_price = value
+    @adjusted_value.setter
+    def adjusted_value(self, value):
+        self._adjusted_value = value
 
-    @total_price.expression
-    def total_price(cls):
-        # This allows querying by total_price, e.g. session.query(PriceEntry).filter(PriceEntry.total_price > 100)
-        # Note: COALESCE might be database-specific, but common. For SQLite, it works.
+    @adjusted_value.expression
+    def adjusted_value(cls):
         from sqlalchemy.sql.functions import coalesce
-        return cls.price + coalesce(cls.shipping_cost, 0) + coalesce(cls.taxes, 0)
+        from sqlalchemy.sql import case
+
+        # If value_currency is present, consider shipping and taxes. Otherwise, just primary_value.
+        # This SQL expression might become complex depending on how strictly we define "monetary".
+        # For simplicity, if value_currency is not NULL, we assume it's monetary and add costs.
+        # A more robust way might involve checking value_currency against a list of known currency codes.
+        return case(
+            (cls.value_currency != None, cls.primary_value + coalesce(cls.shipping_cost, 0) + coalesce(cls.taxes, 0)),
+            else_ = cls.primary_value
+        )
 
 
 class Recommendation(Base):

@@ -41,87 +41,61 @@ class BooksToScrapeScraper(BaseScraper):
             price_element = soup.select_one(price_selector)
             if price_element:
                 price_text = price_element.get_text(strip=True)
-                # Price text is like "£51.77". Use the robust cleaner from BaseScraper.
-                result.price = self._clean_price_string(price_text)
+                result.primary_value = self._clean_price_string(price_text) # Renamed
 
-                # Determine currency from symbol
                 if "£" in price_text:
-                    result.currency = "GBP"
+                    result.value_currency = "GBP" # Renamed
                 elif "€" in price_text:
-                    result.currency = "EUR"
+                    result.value_currency = "EUR" # Renamed
                 elif "$" in price_text:
-                    result.currency = "USD"
-                # Add more currency detections if needed
+                    result.value_currency = "USD" # Renamed
+                else:
+                    result.value_currency = None # Default if no symbol matches
+                    logger.info(f"Unknown currency in '{price_text}' for shop {self.SHOP_NAME} on {product_url}. Setting currency to None.")
             else:
-                logger.warning(f"Price element not found using selector '{price_selector}' on {product_url} for shop {self.SHOP_NAME}")
+                logger.warning(f"Primary value (price) element not found using selector '{price_selector}' on {product_url} for shop {self.SHOP_NAME}")
         else:
-            logger.warning(f"Price selector not configured for shop {self.SHOP_NAME}")
+            logger.warning(f"Primary value (price) selector not configured for shop {self.SHOP_NAME}")
 
         # Extract Availability (Stock Status)
         availability_selector = self.selectors.get("availability")
         if availability_selector:
             availability_element = soup.select_one(availability_selector)
             if availability_element:
-                # Text is like "In stock (22 available)" -> extract "In stock" and optionally the count
                 availability_text = availability_element.get_text(strip=True)
-
-                # Simple extraction of the main status part (e.g., "In stock")
                 match = re.search(r"^(.*?)(?:\s*\(|$)", availability_text)
                 if match:
                     result.stock_status = match.group(1).strip()
                 else:
-                    result.stock_status = availability_text # Fallback to full text
-
-                # Optional: extract count if needed later
-                # count_match = re.search(r'\((\d+)\s+available\)', availability_text)
-                # if count_match:
-                #     result.stock_count = int(count_match.group(1))
+                    result.stock_status = availability_text
             else:
                 logger.warning(f"Availability element not found using selector '{availability_selector}' on {product_url} for shop {self.SHOP_NAME}")
         else:
             logger.warning(f"Availability selector not configured for shop {self.SHOP_NAME}")
 
-        # Extract Product Description (Optional)
-        # description_selector = self.selectors.get("product_description")
-        # if description_selector:
-        #     description_element = soup.select_one(description_selector)
-        #     if description_element:
-        #         result.product_description = description_element.get_text(strip=True)
-        #     # else: print(f"Warning: Description element not found...")
-
         return result
 
 if __name__ == '__main__':
-    print(f"--- Testing {BooksToScrapeScraper.SHOP_NAME} Scraper ---")
+    # Setup basic logging if run directly
+    from price_tracker_app.logging_config import setup_logging
+    setup_logging(level=logging.DEBUG) # Use DEBUG for testing this scraper
 
-    # Test with a specific product URL from books.toscrape.com
-    # Example: "A Light in the Attic"
+    logger.info(f"--- Testing {BooksToScrapeScraper.SHOP_NAME} Scraper ---")
+
     test_product_url = "http://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html"
-
     scraper = BooksToScrapeScraper()
 
-    # This will make a live HTTP request
-    print(f"Attempting to scrape: {test_product_url}")
-    # Ensure your machine has internet access for this test to run.
+    logger.info(f"Attempting to scrape: {test_product_url}")
 
-    # Option 1: Call scrape_product (fetches and parses)
     scraped_data_live = scraper.scrape_product(test_product_url)
 
-    # Option 2: Fetch content first, then parse (for more control or if content is already available)
-    # html_content = scraper.fetch_page_content(test_product_url)
-    # if html_content:
-    #     scraped_data_live = scraper.parse_product_data(html_content, test_product_url)
-    # else:
-    #     scraped_data_live = None
-
     if scraped_data_live:
-        print("\nScraped Data (Live Test):")
-        print(f"  Name: {scraped_data_live.product_name}")
-        print(f"  Price: {scraped_data_live.price}")
-        print(f"  Currency: {scraped_data_live.currency}")
-        print(f"  Stock Status: {scraped_data_live.stock_status}")
-        # print(f"  Description: {scraped_data_live.product_description}")
+        logger.info("Scraped Data (Live Test):") # Changed print to logger.info
+        logger.info(f"  Name: {scraped_data_live.product_name}")
+        logger.info(f"  Primary Value: {scraped_data_live.primary_value}") # Updated field name
+        logger.info(f"  Value Currency: {scraped_data_live.value_currency}") # Updated field name
+        logger.info(f"  Stock Status: {scraped_data_live.stock_status}")
     else:
-        print(f"Failed to scrape data from {test_product_url}. Check network connection or if site structure changed.")
+        logger.error(f"Failed to scrape data from {test_product_url}. Check network or site structure.")
 
-    print(f"\n--- {BooksToScrapeScraper.SHOP_NAME} Scraper Test Finished ---")
+    logger.info(f"--- {BooksToScrapeScraper.SHOP_NAME} Scraper Test Finished ---")

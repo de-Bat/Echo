@@ -44,8 +44,8 @@ def shop_group():
     pass
 
 @shop_group.command("add")
-@click.option("--name", required=True, help="Name of the shop (e.g., Amazon, ExampleShop).")
-@click.option("--url", required=True, help="Homepage URL of the shop (e.g., https://www.amazon.com).")
+@click.option("--name", required=True, help="Name of the shop (e.g., ExampleShop, BooksToScrape, QuotesToScrape).")
+@click.option("--url", required=True, help="Homepage URL of the shop (e.g., http://books.toscrape.com).")
 def add_shop(name: str, url: str):
     """Adds a new shop to the database."""
     logger = logging.getLogger(__name__)
@@ -195,17 +195,18 @@ def item_prices(item_identifier: str):
             logger.info(f"No price entries for item '{item_db.name}' (ID: {item_db.id}).")
             return
 
-        click.echo(f"Recent Prices for '{item_db.name}' (ID: {item_db.id}):")
+        click.echo(f"Recent Value Entries for '{item_db.name}' (ID: {item_db.id}):")
         for p_entry in prices:
             shop = crud.get_shop(db, p_entry.shop_id)
-            shop_name_str = shop.name if shop else "Unknown Shop" # Renamed
+            shop_name_str = shop.name if shop else "Unknown Shop"
+            currency_display = p_entry.value_currency if p_entry.value_currency else ""
             click.echo(
                 f"  - Date: {p_entry.timestamp.strftime('%Y-%m-%d %H:%M')}, "
-                f"Price: {p_entry.currency} {p_entry.price:.2f} "
-                f"(Total: {p_entry.total_price:.2f} if available), "
+                f"Primary Value: {currency_display}{p_entry.primary_value:.2f}, "
+                f"Adjusted Value: {currency_display}{p_entry.adjusted_value:.2f} (if applicable), "
                 f"Shop: {shop_name_str}, URL: {p_entry.url_scraped_from}"
             )
-        logger.info(f"Displayed {len(prices)} price entries for item '{item_db.name}'.")
+        logger.info(f"Displayed {len(prices)} value entries for item '{item_db.name}'.")
     except Exception as e:
         logger.exception(f"Error fetching prices for '{item_identifier}':")
         click.secho(f"Error fetching prices: {e}", fg="red")
@@ -215,7 +216,7 @@ def item_prices(item_identifier: str):
 # --- Track Command ---
 @cli.command("track")
 @click.option("--item-id", "item_id_str", required=True, help="ID of the item to track.")
-@click.option("--shop-name", required=True, help=f"Name of the shop to scrape from (e.g., {EXAMPLE_SHOP_NAME_FOR_REGISTRY}, BooksToScrape).")
+@click.option("--shop-name", required=True, help=f"Name of the shop to scrape from (e.g., {EXAMPLE_SHOP_NAME_FOR_REGISTRY}, BooksToScrape, QuotesToScrape).")
 @click.option("--product-url", required=True, help="The specific product URL on the shop's site to scrape now.")
 def track_item_url(item_id_str: str, shop_name: str, product_url: str):
     """Scrapes a specific product URL for an item, updates price, and generates a new recommendation."""

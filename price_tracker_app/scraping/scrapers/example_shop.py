@@ -45,11 +45,11 @@ class ExampleShopScraper(BaseScraper):
             price_element = soup.select_one(price_selector)
             if price_element:
                 raw_price_str = price_element.get_text(strip=True)
-                result.price = self._clean_price_string(raw_price_str) # Use inherited cleaner
+                result.primary_value = self._clean_price_string(raw_price_str) # Renamed
             else:
-                logger.warning(f"Price element not found using selector '{price_selector}' on {product_url} for shop {self.SHOP_NAME}")
+                logger.warning(f"Primary value (price) element not found using selector '{price_selector}' on {product_url} for shop {self.SHOP_NAME}")
         else:
-            logger.warning(f"Price selector not configured for shop {self.SHOP_NAME}.")
+            logger.warning(f"Primary value (price) selector not configured for shop {self.SHOP_NAME}.")
 
         # Extract Currency Symbol (optional, can help validate or determine currency if not fixed)
         currency_selector = self.selectors.get("currency_symbol")
@@ -59,13 +59,15 @@ class ExampleShopScraper(BaseScraper):
                 currency_symbol = currency_element.get_text(strip=True)
                 # Basic symbol to code mapping (can be expanded)
                 if currency_symbol == "$":
-                    result.currency = "USD"
+                    result.value_currency = "USD" # Renamed
                 elif currency_symbol == "€":
-                    result.currency = "EUR"
+                    result.value_currency = "EUR" # Renamed
                 elif currency_symbol == "£":
-                    result.currency = "GBP"
+                    result.value_currency = "GBP" # Renamed
                 else:
-                    result.currency = "UNKNOWN" # Or keep default USD
+                    # If symbol is unknown, set currency to None or a placeholder
+                    result.value_currency = None
+                    logger.info(f"Unknown currency symbol '{currency_symbol}' found for shop {self.SHOP_NAME} on {product_url}. Setting currency to None.")
             # else:
                 # print(f"Warning: Currency symbol element not found using selector '{currency_selector}' on {product_url}")
         # else:
@@ -136,14 +138,14 @@ if __name__ == '__main__':
         scraped_data = scraper.parse_product_data(html_content_for_test, product_url=f"file:///{file_path_for_testing}")
 
         if scraped_data:
-            print("Scraped Data:")
-            print(f"  Name: {scraped_data.product_name}")
-            print(f"  Price: {scraped_data.price}")
-            print(f"  Currency: {scraped_data.currency}")
-            print(f"  Shipping Cost: {scraped_data.shipping_cost}")
-            print(f"  Stock Status: {scraped_data.stock_status}")
+            logger.info("Scraped Data (Local File Test):")
+            logger.info(f"  Name: {scraped_data.product_name}")
+            logger.info(f"  Primary Value: {scraped_data.primary_value}")
+            logger.info(f"  Value Currency: {scraped_data.value_currency}")
+            logger.info(f"  Shipping Cost: {scraped_data.shipping_cost}")
+            logger.info(f"  Stock Status: {scraped_data.stock_status}")
         else:
-            print("Failed to scrape data from local file.")
+            logger.error("Failed to scrape data from local file for ExampleShop.")
 
     except FileNotFoundError:
         print(f"Error: Test HTML file not found at '{file_path_for_testing}'. Make sure the path is correct.")
